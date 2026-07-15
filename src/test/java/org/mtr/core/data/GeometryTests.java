@@ -1,8 +1,15 @@
 package org.mtr.core.data;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
+import org.mtr.core.tool.Angle;
 import org.mtr.core.tool.Utilities;
 import org.mtr.core.tool.Vector;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -10,6 +17,117 @@ import static org.junit.jupiter.api.Assertions.*;
  * Unit tests for core geometry and utility classes
  */
 public final class GeometryTests {
+
+	private static final double TOLERANCE = 1E-9;
+	private static final Rail.Shape[] SHAPES = {Rail.Shape.QUADRATIC, Rail.Shape.TWO_RADII, Rail.Shape.CABLE};
+	private static final int[] TILT_CONFIGS = {2, 3, 4, 5, 6, 7};
+
+	private record RenderSample(double x1, double y1, double z1, double x2, double y2, double z2, double x3, double y3, double z3, double x4, double y4, double z4, double tilt) {}
+
+	private static RailMath createRailMath(long x1, long z1, Angle a1, long x2, long z2, Angle a2, long y1, long y2, Rail.Shape shape, int tiltPoints) {
+		return new RailMath(
+			new Position(x1, y1, z1), a1,
+			new Position(x2, y2, z2), a2,
+			shape, 10, tiltPoints,
+			0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+		);
+	}
+
+	private static List<RenderSample> collectVector(RailMath railMath, double interval, float r1, float r2) {
+		final List<RenderSample> samples = new ArrayList<>();
+		railMath.render((x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tilt) ->
+			samples.add(new RenderSample(x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tilt)),
+			interval, r1, r2
+		);
+		return samples;
+	}
+
+	private static List<RenderSample> collectScalar(RailMath railMath, double interval, float r1, float r2) {
+		final List<RenderSample> samples = new ArrayList<>();
+		railMath.renderScalar((x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tilt) ->
+			samples.add(new RenderSample(x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tilt)),
+			interval, r1, r2
+		);
+		return samples;
+	}
+
+	private static void assertSampleEquals(RenderSample expected, RenderSample actual, double tol) {
+		assertEquals(expected.x1, actual.x1, tol, "x1 mismatch");
+		assertEquals(expected.y1, actual.y1, tol, "y1 mismatch");
+		assertEquals(expected.z1, actual.z1, tol, "z1 mismatch");
+		assertEquals(expected.x2, actual.x2, tol, "x2 mismatch");
+		assertEquals(expected.y2, actual.y2, tol, "y2 mismatch");
+		assertEquals(expected.z2, actual.z2, tol, "z2 mismatch");
+		assertEquals(expected.x3, actual.x3, tol, "x3 mismatch");
+		assertEquals(expected.y3, actual.y3, tol, "y3 mismatch");
+		assertEquals(expected.z3, actual.z3, tol, "z3 mismatch");
+		assertEquals(expected.x4, actual.x4, tol, "x4 mismatch");
+		assertEquals(expected.y4, actual.y4, tol, "y4 mismatch");
+		assertEquals(expected.z4, actual.z4, tol, "z4 mismatch");
+		assertEquals(expected.tilt, actual.tilt, tol, "tilt mismatch");
+	}
+
+	/**
+	 * Provides parameterized test cases covering various rail configurations.
+	 * Each entry is: {x1, z1, a1, x2, z2, a2, y1, y2, shape, tiltPoints, interval, r1, r2, name}
+	 */
+	static Stream<org.junit.jupiter.params.provider.Arguments> railConfigProvider() {
+		final List<org.junit.jupiter.params.provider.Arguments> cases = new ArrayList<>();
+
+		// Straight horizontal
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0f, 0f));
+		// Straight with slope
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 65L, Rail.Shape.QUADRATIC, 3, 0.5, 0f, 0f));
+		// 90-degree curve
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 10L, Angle.S, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0f, 0f));
+		// Curve with slope
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 10L, Angle.S, 60L, 65L, Rail.Shape.TWO_RADII, 4, 0.5, 0f, 0f));
+		// Double curve (S-bend)
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 20L, 5L, Angle.W, 60L, 60L, Rail.Shape.QUADRATIC, 5, 0.5, 0f, 0f));
+		// Straight with wide offset
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0.25f, 0.25f));
+		// Curve with offset and 7 tilt points
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 10L, Angle.S, 60L, 62L, Rail.Shape.QUADRATIC, 7, 0.5, 0.125f, 0.25f));
+		// Short rail (under 0.5 block)
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 3L, 0L, Angle.E, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0f, 0f));
+		// Cable shape
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 65L, Rail.Shape.CABLE, 2, 0.5, 0f, 0f));
+		// Reverse direction curve
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(10L, 10L, Angle.W, 0L, 0L, Angle.N, 60L, 60L, Rail.Shape.QUADRATIC, 6, 0.5, 0f, 0f));
+		// Only offset1 nonzero
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0.25f, 0f));
+		// Only offset2 nonzero
+		cases.add(org.junit.jupiter.params.provider.Arguments.of(0L, 0L, Angle.E, 10L, 0L, Angle.E, 60L, 60L, Rail.Shape.QUADRATIC, 2, 0.5, 0f, 0.25f));
+
+		return cases.stream();
+	}
+
+	@ParameterizedTest(name = "[{index}] {0},{1},{2} -> {3},{4},{5} shape={8} tilt={9} interval={10} r1={11} r2={12}")
+	@MethodSource("railConfigProvider")
+	public void testRenderScalarMatchesVector(long x1, long z1, Angle a1, long x2, long z2, Angle a2, long y1, long y2, Rail.Shape shape, int tiltPoints, double interval, float r1, float r2) {
+		final RailMath railMath = createRailMath(x1, z1, a1, x2, z2, a2, y1, y2, shape, tiltPoints);
+		final List<RenderSample> vectorSamples = collectVector(railMath, interval, r1, r2);
+		final List<RenderSample> scalarSamples = collectScalar(railMath, interval, r1, r2);
+
+		assertEquals(vectorSamples.size(), scalarSamples.size(), "Sample count mismatch");
+
+		for (int i = 0; i < vectorSamples.size(); i++) {
+			assertSampleEquals(vectorSamples.get(i), scalarSamples.get(i), TOLERANCE);
+		}
+	}
+
+	@Test
+	public void testGetTiltAngleScalar() {
+		final RailMath railMath = createRailMath(0, 0, Angle.E, 10, 0, Angle.E, 60, 65, Rail.Shape.QUADRATIC, 7);
+		final double length = railMath.getLength();
+
+		// Sample tilt at several points along the rail
+		for (double pos = 0; pos <= length; pos += 0.5) {
+			final double expected = railMath.getTiltAngle(pos, false);
+			final double actual = railMath.getTiltAngleScalar(pos);
+			assertEquals(expected, actual, TOLERANCE, "Tilt mismatch at position " + pos);
+		}
+	}
 
 	@Test
 	public void testPositionConstruction() {

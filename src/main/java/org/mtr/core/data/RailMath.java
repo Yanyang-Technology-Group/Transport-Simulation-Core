@@ -60,6 +60,10 @@ public class RailMath {
 	private final boolean isStraight1;
 	private final boolean isStraight2;
 
+	private final double[] tiltPointDistances;
+	private final double[] tiltPointAngles;
+	private final int tiltPointCount;
+
 	private static final double ACCEPT_THRESHOLD = 1E-4;
 	private static final int CABLE_CURVATURE_SCALE = 1000;
 	private static final int MAX_CABLE_DIP = 8;
@@ -277,6 +281,22 @@ public class RailMath {
 		this.tiltAngleDistance2a = tiltAngleDistance2a;
 		this.tiltAngle2 = Math.toRadians(tiltAngleDegrees2);
 
+		// Pre-compute tilt interpolation arrays (primitive, no allocations in hot path)
+		final double count1 = getLength1();
+		final double count2 = getLength2();
+		final double totalLength = count1 + count2;
+		if (totalLength == 0) {
+			tiltPointCount = 0;
+			tiltPointDistances = new double[0];
+			tiltPointAngles = new double[0];
+		} else {
+			final double middlePoint = count1 == 0 || count2 == 0 ? totalLength / 2 : count1;
+			final double[][] computed = computeTiltPoints(middlePoint, totalLength);
+			tiltPointDistances = computed[0];
+			tiltPointAngles = computed[1];
+			tiltPointCount = tiltPointDistances.length;
+		}
+
 		// Calculate bounds (for culling)
 		final double[] bounds = new double[]{Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE, -Double.MAX_VALUE};
 		render((x1, y1, z1, x2, y2, z2, x3, y3, z3, x4, y4, z4, tiltAngle) -> {
@@ -311,6 +331,70 @@ public class RailMath {
 		maxX = bounds[3] < bounds[0] ? 0 : (long) Math.ceil(bounds[3]);
 		maxY = bounds[4] < bounds[1] ? 0 : (long) Math.ceil(bounds[4]);
 		maxZ = bounds[5] < bounds[2] ? 0 : (long) Math.ceil(bounds[5]);
+	}
+
+	/**
+	 * Pre-computes tilt control point arrays at construction time.
+	 * Returns {distances[], angles[]} where distances[i] is the distance along the rail
+	 * and angles[i] is the tilt angle (radians) at that point.
+	 */
+	private double[][] computeTiltPoints(double middlePoint, double length) {
+		switch (tiltPoints) {
+			case 3:
+				return new double[][]{
+					new double[]{0, middlePoint, length},
+					new double[]{tiltAngle1, tiltAngleMiddle, tiltAngle2}
+				};
+			case 4: {
+				final double d1a = Utilities.clampSafe(tiltAngleDistance1a, 0, middlePoint);
+				final double d2a = Utilities.clampSafe(length - tiltAngleDistance2a, middlePoint, length);
+				return new double[][]{
+					new double[]{0, d1a, d2a, length},
+					new double[]{tiltAngle1, tiltAngle1a, tiltAngle2a, tiltAngle2}
+				};
+			}
+			case 5: {
+				final double d1a = Utilities.clampSafe(tiltAngleDistance1a, 0, middlePoint);
+				final double d2a = Utilities.clampSafe(length - tiltAngleDistance2a, middlePoint, length);
+				return new double[][]{
+					new double[]{0, d1a, middlePoint, d2a, length},
+					new double[]{tiltAngle1, tiltAngle1a, tiltAngleMiddle, tiltAngle2a, tiltAngle2}
+				};
+			}
+			case 6:
+			case 7: {
+				double d1a = Utilities.clampSafe(tiltAngleDistance1a, 0, middlePoint);
+				double d1b = Utilities.clampSafe(middlePoint - tiltAngleDistance1b, 0, middlePoint);
+				double d2b = Utilities.clampSafe(middlePoint + tiltAngleDistance2b, middlePoint, length);
+				double d2a = Utilities.clampSafe(length - tiltAngleDistance2a, middlePoint, length);
+				if (d1a > d1b) {
+					final double avg = Utilities.getAverage(d1a, d1b);
+					d1a = avg;
+					d1b = avg;
+				}
+				if (d2b > d2a) {
+					final double avg = Utilities.getAverage(d2a, d2b);
+					d2a = avg;
+					d2b = avg;
+				}
+				if (tiltPoints == 6) {
+					return new double[][]{
+						new double[]{0, d1a, d1b, d2b, d2a, length},
+						new double[]{tiltAngle1, tiltAngle1a, tiltAngle1b, tiltAngle2b, tiltAngle2a, tiltAngle2}
+					};
+				} else {
+					return new double[][]{
+						new double[]{0, d1a, d1b, middlePoint, d2b, d2a, length},
+						new double[]{tiltAngle1, tiltAngle1a, tiltAngle1b, tiltAngleMiddle, tiltAngle2b, tiltAngle2a, tiltAngle2}
+					};
+				}
+			}
+			default: // 2
+				return new double[][]{
+					new double[]{0, length},
+					new double[]{tiltAngle1, tiltAngle2}
+				};
+		}
 	}
 
 	public Vector getPosition(double rawValue, boolean reverse) {
@@ -352,6 +436,30 @@ public class RailMath {
 		return 0;
 	}
 
+	/**
+	 * Allocation-free tilt interpolation using pre-computed primitive arrays.
+	 * Only for forward (non-reversed) lookups.
+	 */
+	double getTiltAngleScalar(double value) {
+		if (tiltPointCount == 0) return 0;
+		final double length = getLength();
+		final double clamped = Utilities.clampSafe(value, 0, length);
+		for (int i = 1; i < tiltPointCount; i++) {
+			final double p1 = tiltPointDistances[i - 1];
+			final double p2 = tiltPointDistances[i];
+			if (i == tiltPointCount - 1 || clamped < p2) {
+				final double a1 = tiltPointAngles[i - 1];
+				final double a2 = tiltPointAngles[i];
+				return Utilities.circularClamp(Utilities.getValueFromPercentage(
+					(clamped - p1) / (p2 - p1),
+					a1,
+					Utilities.circularClamp(a2, a1 - Math.PI, a1 + Math.PI, 2 * Math.PI)
+				), -Math.PI, Math.PI, 2 * Math.PI);
+			}
+		}
+		return 0;
+	}
+
 	public double getLength() {
 		return getLength1() + getLength2();
 	}
@@ -369,6 +477,122 @@ public class RailMath {
 	public void render(RenderRail callback, double interval, float offsetRadius1, float offsetRadius2) {
 		renderSegment(h1, k1, r1, tStart1, tEnd1, 0, interval, offsetRadius1, offsetRadius2, reverseT1, isStraight1, callback);
 		renderSegment(h2, k2, r2, tStart2, tEnd2, Math.abs(tEnd1 - tStart1), interval, offsetRadius1, offsetRadius2, reverseT2, isStraight2, callback);
+	}
+
+	/**
+	 * Scalar (allocation-free) render entry point for the rendering hot path.
+	 * Produces exactly the same geometry as {@link #render(RenderRail, double, float, float)}
+	 * but never creates {@link Vector}, collection, or lambda objects.
+	 */
+	public void renderScalar(RenderRail callback, double interval, float offsetRadius1, float offsetRadius2) {
+		renderSegmentScalar(h1, k1, r1, tStart1, tEnd1, 0, interval, offsetRadius1, offsetRadius2, reverseT1, isStraight1, callback);
+		renderSegmentScalar(h2, k2, r2, tStart2, tEnd2, Math.abs(tEnd1 - tStart1), interval, offsetRadius1, offsetRadius2, reverseT2, isStraight2, callback);
+	}
+
+	private void renderSegmentScalar(double h, double k, double r, double tStart, double tEnd, double rawValueOffset, double interval, float offsetRadius1, float offsetRadius2, boolean reverseT, boolean isStraight, RenderRail callback) {
+		final double count = Math.abs(tEnd - tStart);
+		final double increment = count < 0.5 || interval <= 0 ? 0.5 : count / Math.round(count) * interval;
+		boolean hasPrev = false;
+		double prevX1 = 0, prevY1 = 0, prevZ1 = 0;
+		double prevX2 = 0, prevY2 = 0, prevZ2 = 0;
+
+		for (double i = 0; i < count + increment - 0.001; i += increment) {
+			final double t = (reverseT ? -1 : 1) * i + tStart;
+			final double y = getPositionY(i + rawValueOffset);
+			final double tiltAngle = getTiltAngleScalar(i + rawValueOffset);
+
+			// Center position (scalar)
+			final double centerX, centerY, centerZ;
+			if (isStraight) {
+				final double hAbs = Math.abs(h);
+				final double kAbs = Math.abs(k);
+				centerX = h * t + k * (hAbs >= 0.5 && kAbs >= 0.5 ? 0 : r) + 0.5;
+				centerY = y;
+				centerZ = k * t + h * r + 0.5;
+			} else {
+				centerX = h + r * Math.cos(t / r) + 0.5;
+				centerY = y;
+				centerZ = k + r * Math.sin(t / r) + 0.5;
+			}
+
+			// Corner 1 (offsetRadius2)
+			final double c1x, c1y, c1z;
+			if (offsetRadius2 == 0) {
+				c1x = centerX; c1y = centerY; c1z = centerZ;
+			} else {
+				final double px, py, pz;
+				if (isStraight) {
+					final double hAbs = Math.abs(h);
+					final double kAbs = Math.abs(k);
+					px = h * t + k * ((hAbs >= 0.5 && kAbs >= 0.5 ? 0 : r) + offsetRadius2) + 0.5;
+					py = y;
+					pz = k * t + h * (r - offsetRadius2) + 0.5;
+				} else {
+					px = h + (r + offsetRadius2) * Math.cos(t / r) + 0.5;
+					py = y;
+					pz = k + (r + offsetRadius2) * Math.sin(t / r) + 0.5;
+				}
+				final double tilt = -tiltAngle * (reverseT ? -1 : 1);
+				final double ox = px - centerX;
+				final double oy = py - centerY;
+				final double oz = pz - centerZ;
+				final double angle = Math.atan2(oz, ox);
+				final double cosA = Math.cos(angle);
+				final double sinA = Math.sin(angle);
+				final double cosT = Math.cos(tilt);
+				final double sinT = Math.sin(tilt);
+				final double rx = ox * cosA + oz * sinA;
+				final double rz = oz * cosA - ox * sinA;
+				final double tx = rx * cosT + oy * sinT;
+				final double ty = oy * cosT - rx * sinT;
+				c1x = tx * cosA - rz * sinA + centerX;
+				c1y = ty + centerY;
+				c1z = rz * cosA + tx * sinA + centerZ;
+			}
+
+			// Corner 2 (offsetRadius1)
+			final double c2x, c2y, c2z;
+			if (offsetRadius1 == 0) {
+				c2x = centerX; c2y = centerY; c2z = centerZ;
+			} else {
+				final double px, py, pz;
+				if (isStraight) {
+					final double hAbs = Math.abs(h);
+					final double kAbs = Math.abs(k);
+					px = h * t + k * ((hAbs >= 0.5 && kAbs >= 0.5 ? 0 : r) + offsetRadius1) + 0.5;
+					py = y;
+					pz = k * t + h * (r - offsetRadius1) + 0.5;
+				} else {
+					px = h + (r + offsetRadius1) * Math.cos(t / r) + 0.5;
+					py = y;
+					pz = k + (r + offsetRadius1) * Math.sin(t / r) + 0.5;
+				}
+				final double tilt = tiltAngle * (reverseT ? -1 : 1);
+				final double ox = px - centerX;
+				final double oy = py - centerY;
+				final double oz = pz - centerZ;
+				final double angle = Math.atan2(oz, ox);
+				final double cosA = Math.cos(angle);
+				final double sinA = Math.sin(angle);
+				final double cosT = Math.cos(tilt);
+				final double sinT = Math.sin(tilt);
+				final double rx = ox * cosA + oz * sinA;
+				final double rz = oz * cosA - ox * sinA;
+				final double tx = rx * cosT + oy * sinT;
+				final double ty = oy * cosT - rx * sinT;
+				c2x = tx * cosA - rz * sinA + centerX;
+				c2y = ty + centerY;
+				c2z = rz * cosA + tx * sinA + centerZ;
+			}
+
+			if (hasPrev) {
+				callback.renderRail(prevX1, prevY1, prevZ1, prevX2, prevY2, prevZ2, c1x, c1y, c1z, c2x, c2y, c2z, tiltAngle);
+			}
+
+			prevX1 = c2x; prevY1 = c2y; prevZ1 = c2z;
+			prevX2 = c1x; prevY2 = c1y; prevZ2 = c1z;
+			hasPrev = true;
+		}
 	}
 
 	ObjectImmutableList<DoubleDoubleImmutablePair> getTiltPointsAndAngles(boolean reversed) {

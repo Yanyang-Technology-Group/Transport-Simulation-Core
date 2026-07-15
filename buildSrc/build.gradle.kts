@@ -8,7 +8,7 @@ group = "org.mtr"
 version = File(rootDir.parentFile, "gradle.properties").readLines().find { it.startsWith("version=") }?.substringAfter("=") ?: "unspecified"
 
 repositories {
-	mavenCentral()
+	maven(url = "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
 }
 
 dependencies {

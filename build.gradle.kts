@@ -14,7 +14,7 @@ group = "org.mtr"
 version = project.version
 
 repositories {
-	mavenCentral()
+	maven(url = "https://mirrors.cloud.tencent.com/nexus/repository/maven-public/")
 	maven(url = "https://repo.mikeprimm.com/")
 	flatDir { dirs("libs") }
 }
@@ -39,6 +39,7 @@ dependencies {
 
 	// Test
 	testImplementation("org.junit.jupiter:junit-jupiter-api:+")
+	testImplementation("org.junit.jupiter:junit-jupiter-params:+")
 	testImplementation("org.junit.platform:junit-platform-launcher:+")
 	testImplementation("org.apache.httpcomponents:httpclient:+")
 	testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:+")
@@ -51,6 +52,9 @@ java {
 	withSourcesJar()
 	withJavadocJar()
 }
+
+
+
 
 publishing {
 	publications {
